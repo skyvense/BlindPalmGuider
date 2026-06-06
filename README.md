@@ -1,59 +1,196 @@
-# ESP32-S3 Super Mini 串口多路复用控制器
+# EMS Multi-Channel Controller
 
-基于 ESP32-S3 Super Mini 开发板的固件，实现 8 路串口多路复用切换，并将 USB 串口透传到 EMS 设备 UART 接口。
+ESP32-S3 Super Mini firmware that reads depth from a MaixSense-A010 ToF camera, maps the scene into 8 directional zones, and drives 8 independent EMS (Electrical Muscle Stimulation) devices through a serial multiplexer. A built-in WiFi access point serves a real-time web dashboard for monitoring and control.
 
-## 功能
+---
 
-- **8 路通道切换**：通过 GPIO11/12/13 三根引脚的高低电平组合（3 位二进制），控制外部 8 路多路复用器（如 74HC4051）选择当前激活通道
-- **USB 串口透传**：未识别为控制命令的串口输入，会被原样转发到 EMS 设备（UART2，GPIO17=TX / GPIO18=RX）
-- **EMS 数据回传**：EMS UART 收到的数据实时回传到 USB 串口，方便调试和监控
-- **板载 RGB LED**：GPIO48 连接 FastLED 可寻址 LED（当前未启用控制逻辑，留作扩展）
+## How It Works
 
-## 硬件
+```
+[ToF Camera] ──SoftwareSerial──► [ESP32-S3] ──HardwareSerial──► [8-ch Mux] ──► [EMS ×8]
+                                      │
+                                   WiFi AP
+                                      │
+                                  [Browser]
+```
 
-| 用途 | 引脚 |
-|------|------|
-| 多路复用器 A 位 | GPIO11 |
-| 多路复用器 B 位 | GPIO12 |
-| 多路复用器 C 位 | GPIO13 |
-| EMS UART TX | GPIO17 |
-| EMS UART RX | GPIO18 |
-| 板载 RGB LED | GPIO48 |
+1. The camera streams 25×25 depth frames at 10 fps over UART.
+2. The firmware downscales each frame to a 3×3 grid (block averaging, 10% outlier trim).
+3. The 8 surrounding cells (center discarded) map to 8 EMS channels — TL, T, TR, L, R, BL, B, BR.
+4. For each channel the mux is switched, an EMS intensity command is sent, and the device's response is read — all within a single frame cycle.
+5. The web dashboard reflects live distance data and accepts control input with ~300 ms latency.
 
-> 注意：GPIO11/12 在部分 ESP32-S3 变体上与 SPI Flash 复用，使用前请确认你的板子引脚实际可用。详见 [AVAILABLE_PINS.md](AVAILABLE_PINS.md)。
+---
 
-## 串口命令
+## Hardware
 
-波特率：**115200**
+### Components
 
-| 命令 | 说明 |
-|------|------|
-| `0` ~ `7` | 直接输入单个数字切换到对应通道 |
-| `select 0` ~ `select 7` | 用 `select N` 格式切换通道 |
+| Component | Description |
+|-----------|-------------|
+| ESP32-S3 Super Mini | Main controller (ESP32S3FH4R2) |
+| MaixSense-A010 | ToF depth camera, 25×25 px, up to 2 Mbps UART |
+| 8-channel serial mux | Hardware UART multiplexer with A/B/C address pins |
+| EMS devices ×8 | Connected to mux outputs TX0–TX7 / RX0–RX7 |
 
-切换成功后串口会回复 `selected N`。
+### Wiring
 
-其他非命令输入会被透传到 EMS UART。
+| Signal | ESP32-S3 GPIO |
+|--------|--------------|
+| Camera RX (cam TX → ESP RX) | GPIO 8 |
+| Camera TX (cam RX → ESP TX) | GPIO 9 |
+| EMS UART RX | GPIO 17 |
+| EMS UART TX | GPIO 18 |
+| Mux address A (bit 0) | GPIO 11 |
+| Mux address B (bit 1) | GPIO 12 |
+| Mux address C (bit 2) | GPIO 13 |
+| On-board RGB LED | GPIO 48 |
 
-## 构建与烧录
+### Channel Mapping (3×3 → 8 EMS)
 
-项目使用 [PlatformIO](https://platformio.org/) 构建，目标板为 ESP32-S3 Super Mini。
+```
+ ch0 (TL) │ ch1 (T)  │ ch2 (TR)
+──────────┼──────────┼──────────
+ ch3 (L)  │  center  │ ch4 (R)
+           │ (unused) │
+──────────┼──────────┼──────────
+ ch5 (BL) │ ch6 (B)  │ ch7 (BR)
+```
 
-```shell
-# 安装 PlatformIO CLI（如尚未安装）
+The center block is measured but not assigned to a channel. If the center distance is closer than a surrounding cell, that cell inherits the center value (occlusion propagation).
+
+---
+
+## Firmware
+
+### Key Parameters (`src/main.cpp`)
+
+| Define | Default | Description |
+|--------|---------|-------------|
+| `SWITCH_WAIT_MS` | `0` | Delay after mux switch before sending |
+| `SEND_INTERVAL_MS` | `10` | Time to wait for EMS response per command |
+| `AP_SSID` | `"EMS-Control"` | WiFi AP name |
+| `AP_PASS` | `"12345678"` | WiFi AP password |
+
+### EMS State Machine (per channel)
+
+```
+Startup   → all channels disabled (no commands sent)
+
+Enable    → FE 00 00 01 100  (set intensity 1)
+          → start_ems
+
+Each frame, per channel:
+  dist > threshold  →  if running: stop_ems  →  state = stopped
+  dist ≤ threshold  →  FE 00 00 {1–30} 100   (intensity mapped from distance)
+                        if stopped: start_ems  →  state = running
+```
+
+Intensity mapping: `0 m → chMax`, `threshold m → chMin` (linear). Default range 1–5, adjustable per channel up to 30.
+
+### Camera Setup (AT commands on boot)
+
+```
+AT+FPS=10    10 frames per second
+AT+BINN=4    25×25 resolution (4×4 binning)
+AT+DISP=5    LCD + UART output
+```
+
+Camera ISP can be toggled at runtime via the web UI (`AT+ISP=0` / `AT+ISP=1`).
+
+### Frame Format (BINN=4)
+
+```
+0x00 0xFF          2-byte header
+[LEN_H] [LEN_L]    2-byte payload length
+[16 bytes]         metadata (discarded)
+[625 bytes]        25×25 pixel depth data, row-major, uint8
+[CKSUM]            checksum (discarded)
+0xDD               tail byte
+```
+
+Pixel → distance: `dist_mm = (pixel / 5.1)²` (UNIT=0 default)
+
+---
+
+## Web Dashboard
+
+Connect to WiFi `EMS-Control` (password `12345678`) and open `http://192.168.4.1`.
+
+### Sections
+
+**Depth Heatmap** — Live 3×3 color grid. Red = near, blue = far/off. Rotation buttons (↺ ↻) rotate the view in 90° steps without affecting channel assignment.
+
+**Channels** — Same 3×3 layout with per-channel toggle switches, running/stopped status, and the last EMS command sent.
+
+**Distance Threshold** — Global slider (0.1 m – 3.0 m). Cells beyond this distance trigger `stop_ems`.
+
+**Intensity Range** — Per-channel dual-handle slider setting the min and max intensity values (1–30) mapped to the distance range.
+
+**All Channels** — Master toggle. Turns all 8 channels on (sends init + `start_ems`) or off (`stop_ems`) simultaneously.
+
+**Camera** — Toggles `AT+ISP=1` / `AT+ISP=0` to start or stop the ToF sensor.
+
+---
+
+## Serial Commands (USB, 115200 baud)
+
+| Command | Description |
+|---------|-------------|
+| `0` – `7` | Manually switch mux to channel N and run 20× poll |
+| `select N` | Same as above (verbose form) |
+| `autotest` | Run timing test with default params (switchWait=1000ms, sendInterval=500ms) |
+| `autotest W I` | Run timing test with switchWait=W ms, sendInterval=I ms |
+
+Any unrecognised input is forwarded verbatim to the EMS UART.
+
+---
+
+## Build & Flash
+
+```bash
+# Install PlatformIO if needed
 pip install platformio
 
-# 编译
+# Build
 pio run
 
-# 编译并烧录
+# Build and flash (auto-detect port)
 pio run --target upload
 
-# 打开串口监视器
+# Open serial monitor
 pio device monitor
 ```
 
-## 依赖库
+Target board: `dfrobot_firebeetle2_esp32s3` (pin-compatible with ESP32-S3 Super Mini).
 
-- [FastLED](https://github.com/FastLED/FastLED)
-- [EspSoftwareSerial](https://github.com/plerup/espsoftwareserial)
+### Dependencies
+
+| Library | Source |
+|---------|--------|
+| FastLED | `fastled/FastLED` |
+| EspSoftwareSerial | `plerup/EspSoftwareSerial` |
+| WiFi, WebServer | ESP32 Arduino core (built-in) |
+
+---
+
+## Files
+
+```
+src/main.cpp        Firmware (all logic in one file)
+doc/plan.md         Architecture notes and design decisions
+visualize.py        Python serial heatmap visualizer (matplotlib)
+platformio.ini      Build configuration
+AVAILABLE_PINS.md   GPIO reference for ESP32-S3 Super Mini
+```
+
+### Python Visualizer
+
+Reads `grid (m):` blocks from the USB serial port and renders a live heatmap.
+
+```bash
+pip install pyserial matplotlib numpy -i https://pypi.tuna.tsinghua.edu.cn/simple
+python3 visualize.py
+```
+
+Edit `PORT` at the top of `visualize.py` if your device is not on `/dev/cu.usbmodem11201`.
