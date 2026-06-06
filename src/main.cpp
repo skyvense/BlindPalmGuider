@@ -58,74 +58,92 @@ static const char INDEX_HTML[] PROGMEM = R"=====(
 <title>EMS Control</title>
 <style>
 *{box-sizing:border-box;margin:0;padding:0;font-family:sans-serif}
-body{background:#1a1a2e;color:#eee;padding:16px}
-h1{text-align:center;margin-bottom:20px;font-size:22px;letter-spacing:1px}
-.grid{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;max-width:420px;margin:0 auto 24px}
-.cell{border-radius:10px;padding:14px 8px;text-align:center;transition:background .4s}
-.cell .label{font-size:11px;opacity:.65;margin-bottom:4px}
-.cell .dist{font-size:24px;font-weight:700}
-.cell .cmd{font-size:10px;margin-top:6px;opacity:.75;word-break:break-all;min-height:14px}
-.cell.center{background:#2a2a3a!important}
-.card{display:flex;justify-content:space-between;align-items:center;
-      padding:10px 14px;background:#16213e;border-radius:8px;margin-bottom:8px}
-.card .info{font-size:13px}
-.card .sub{font-size:11px;opacity:.6;margin-top:2px}
-.toggle{position:relative;width:50px;height:27px;flex-shrink:0}
+body{background:#1a1a2e;color:#eee;padding:16px;max-width:480px;margin:0 auto}
+h2{font-size:13px;opacity:.5;text-transform:uppercase;letter-spacing:1px;margin-bottom:8px}
+.g3{display:grid;grid-template-columns:repeat(3,1fr);gap:6px;margin-bottom:20px}
+/* heatmap cells */
+.hcell{border-radius:8px;padding:12px 4px;text-align:center;transition:background .4s;min-height:72px;display:flex;flex-direction:column;justify-content:center}
+.hcell .hn{font-size:10px;opacity:.6;margin-bottom:2px}
+.hcell .hd{font-size:20px;font-weight:700}
+.hcell.hcenter{background:#232336!important}
+/* channel grid cells */
+.ccell{border-radius:8px;padding:8px 6px;background:#16213e;min-height:90px;display:flex;flex-direction:column;justify-content:space-between}
+.ccell.cdisabled{opacity:.45}
+.ccell.ccenter{background:#1a1a2e!important;border:1px dashed #333}
+.cn{font-size:11px;font-weight:700;margin-bottom:2px}
+.cs{font-size:9px;opacity:.6;margin-bottom:4px}
+.ccmd{font-size:8px;opacity:.7;word-break:break-all;min-height:20px;flex:1;margin-bottom:4px}
+/* toggle */
+.toggle{position:relative;width:44px;height:24px;flex-shrink:0;align-self:flex-end}
 .toggle input{opacity:0;width:0;height:0}
-.slider{position:absolute;cursor:pointer;inset:0;background:#444;border-radius:27px;transition:.3s}
-.slider:before{position:absolute;content:"";height:21px;width:21px;left:3px;bottom:3px;
-               background:#fff;border-radius:50%;transition:.3s}
+.slider{position:absolute;cursor:pointer;inset:0;background:#444;border-radius:24px;transition:.3s}
+.slider:before{position:absolute;content:"";height:18px;width:18px;left:3px;bottom:3px;background:#fff;border-radius:50%;transition:.3s}
 input:checked+.slider{background:#43a047}
-input:checked+.slider:before{transform:translateX(23px)}
-.cam-btn{display:block;width:100%;padding:13px;border:none;color:#fff;
-         border-radius:8px;font-size:15px;cursor:pointer;margin-top:12px;transition:.3s}
-.cam-on{background:#0d47a1}.cam-off{background:#555}
-.section-title{font-size:12px;opacity:.5;margin-bottom:8px;text-transform:uppercase;letter-spacing:1px}
+input:checked+.slider:before{transform:translateX(20px)}
+/* bottom controls */
+.row{display:flex;justify-content:space-between;align-items:center;
+     padding:10px 14px;background:#16213e;border-radius:8px;margin-bottom:8px}
+.row b{font-size:14px}
+.row small{font-size:11px;opacity:.55;display:block;margin-top:2px}
+.btn{width:100%;padding:12px;border:none;color:#fff;border-radius:8px;
+     font-size:14px;cursor:pointer;margin-bottom:8px;transition:.3s}
+.bon{background:#0d47a1}.boff{background:#555}
+.master{border:1px solid #43a047}
 </style>
 </head>
 <body>
-<h1>EMS Control</h1>
-<div class="grid" id="heatmap"></div>
-<div style="max-width:420px;margin:0 auto">
-  <div class="card" style="margin-bottom:12px;border:1px solid #43a047">
-    <div class="info"><b>All Channels</b><div class="sub" id="masterSub">all off</div></div>
-    <label class="toggle"><input type="checkbox" id="masterToggle" onchange="toggleAll()"><span class="slider"></span></label>
-  </div>
-  <div class="section-title">Channels</div>
-  <div id="channels"></div>
-  <button class="cam-btn cam-on" id="camBtn" onclick="toggleCamera()">Camera: ON</button>
+
+<h2>Depth Heatmap</h2>
+<div class="g3" id="hmap"></div>
+
+<h2>Channels</h2>
+<div class="g3" id="cgrid"></div>
+
+<div class="row master">
+  <div><b>All Channels</b><small id="masterSub">all off</small></div>
+  <label class="toggle"><input type="checkbox" id="masterTog" onchange="toggleAll()"><span class="slider"></span></label>
 </div>
+<button class="btn bon" id="camBtn" onclick="toggleCamera()">Camera: ON</button>
+
 <script>
 const CH_NAME=['TL','T','TR','L','R','BL','B','BR'];
 const CH_POS=[[0,0],[0,1],[0,2],[1,0],[1,2],[2,0],[2,1],[2,2]];
 
 function distColor(dist,enabled){
-  if(!enabled)return'#2a2a3a';
-  if(dist>=1)return'#1565c0';
+  if(!enabled||dist>=1)return'#1a2a4a';
   const t=1-dist;
-  return`rgb(${Math.round(t*230)},${Math.round((0.5-Math.abs(t-0.5))*200)},${Math.round((1-t)*180)})`;
+  return`rgb(${Math.round(t*230)},${Math.round((0.5-Math.abs(t-0.5))*200)},${Math.round((1-t)*160)})`;
 }
 
-// build heatmap
-const hm=document.getElementById('heatmap');
-const cellEls=[];
+// ── build heatmap (pure distance view) ──
+const hmap=document.getElementById('hmap');
+const hcells=[];
 for(let r=0;r<3;r++)for(let c=0;c<3;c++){
-  const d=document.createElement('div');
-  d.className='cell'+(r===1&&c===1?' center':'');
-  d.innerHTML=r===1&&c===1
-    ?'<div class="dist" style="font-size:13px;opacity:.4">center</div>'
-    :'<div class="label"></div><div class="dist">--</div><div class="cmd"></div>';
-  hm.appendChild(d);cellEls.push(d);
+  const el=document.createElement('div');
+  const center=r===1&&c===1;
+  el.className='hcell'+(center?' hcenter':'');
+  el.innerHTML=center
+    ?'<div class="hd" style="font-size:11px;opacity:.3">center</div>'
+    :'<div class="hn"></div><div class="hd">--</div>';
+  hmap.appendChild(el);hcells.push(el);
 }
 
-// build channel cards
-const chDiv=document.getElementById('channels');
-const chToggles=[];
-for(let i=0;i<8;i++){
-  const card=document.createElement('div');card.className='card';
-  card.innerHTML=`<div class="info">ch${i} <b>${CH_NAME[i]}</b><div class="sub" id="sub${i}">--</div></div>
-    <label class="toggle"><input type="checkbox" id="t${i}" onchange="toggleCh(${i})"><span class="slider"></span></label>`;
-  chDiv.appendChild(card);chToggles.push(card.querySelector('input'));
+// ── build channel grid (toggles + last cmd) ──
+const cgrid=document.getElementById('cgrid');
+const ctoggles=[];
+for(let r=0;r<3;r++)for(let c=0;c<3;c++){
+  const el=document.createElement('div');
+  const center=r===1&&c===1;
+  el.className='ccell'+(center?' ccenter':'');
+  if(center){el.innerHTML='<div style="text-align:center;opacity:.2;font-size:11px;margin:auto">center</div>';}
+  else{
+    // find channel index for this position
+    const i=CH_POS.findIndex(([pr,pc])=>pr===r&&pc===c);
+    el.innerHTML=`<div><div class="cn">ch${i} ${CH_NAME[i]}</div><div class="cs" id="cs${i}">disabled</div><div class="ccmd" id="ccmd${i}">--</div></div>
+      <label class="toggle"><input type="checkbox" id="ct${i}" onchange="toggleCh(${i})"><span class="slider"></span></label>`;
+    ctoggles[i]=el.querySelector('input');
+  }
+  cgrid.appendChild(el);
 }
 
 async function toggleCh(i){await fetch('/toggle/channel/'+i,{method:'POST'})}
@@ -135,34 +153,35 @@ async function toggleCamera(){await fetch('/toggle/camera',{method:'POST'})}
 async function update(){
   try{
     const d=await(await fetch('/data')).json();
-    // update heatmap cells
+    // heatmap
     for(let i=0;i<8;i++){
       const[r,c]=CH_POS[i];
-      const el=cellEls[r*3+c];
+      const el=hcells[r*3+c];
       const ch=d.channels[i];
       el.style.background=distColor(ch.dist,ch.enabled);
-      el.querySelector('.label').textContent=`ch${i} ${CH_NAME[i]}`;
-      el.querySelector('.dist').textContent=ch.dist>=1?'OFF':ch.dist.toFixed(2)+'m';
-      el.querySelector('.cmd').textContent=ch.cmd||'';
+      el.querySelector('.hn').textContent=`ch${i} ${CH_NAME[i]}`;
+      el.querySelector('.hd').textContent=!ch.enabled?'OFF':ch.dist>=1?'--':ch.dist.toFixed(2)+'m';
     }
-    // update channel cards
+    // channel grid
     for(let i=0;i<8;i++){
       const ch=d.channels[i];
-      chToggles[i].checked=ch.enabled;
-      document.getElementById('sub'+i).textContent=
-        (ch.enabled?(ch.running?'running':'stopped'):'disabled')+
-        (ch.dist<1?' · '+ch.dist.toFixed(2)+'m':'');
+      const [r,c]=CH_POS[i];
+      const cell=cgrid.children[r*3+c];
+      cell.className='ccell'+(ch.enabled?'':' cdisabled');
+      ctoggles[i].checked=ch.enabled;
+      document.getElementById('cs'+i).textContent=
+        ch.enabled?(ch.running?'● running':'○ stopped'):'disabled';
+      document.getElementById('ccmd'+i).textContent=ch.cmd||'--';
     }
-    // master toggle
+    // master
     const anyOn=d.channels.some(c=>c.enabled);
     const allOn=d.channels.every(c=>c.enabled);
-    document.getElementById('masterToggle').checked=anyOn;
-    document.getElementById('masterSub').textContent=
-      allOn?'all on':anyOn?'partial':'all off';
-    // camera button
+    document.getElementById('masterTog').checked=anyOn;
+    document.getElementById('masterSub').textContent=allOn?'all on':anyOn?'partial':'all off';
+    // camera
     const btn=document.getElementById('camBtn');
     btn.textContent='Camera: '+(d.camera?'ON':'OFF');
-    btn.className='cam-btn '+(d.camera?'cam-on':'cam-off');
+    btn.className='btn '+(d.camera?'bon':'boff');
   }catch(e){}
 }
 setInterval(update,300);update();
@@ -237,6 +256,13 @@ void handleToggleAll() {
 
 void handleToggleCamera() {
   cameraEnabled = !cameraEnabled;
+  if (cameraEnabled) {
+    Camera_UART.print("AT+ISP=1\r");
+  } else {
+    Camera_UART.print("AT+ISP=0\r");
+    delay(100);
+    while (Camera_UART.available()) Camera_UART.read();
+  }
   server.send(200, "text/plain", "ok");
 }
 
@@ -258,8 +284,12 @@ void switchChannel(uint8_t ch) {
 void sendEMSCmd(const char* cmd, uint8_t ch) {
   Serial.print("[ch"); Serial.print(ch); Serial.print("] >> "); Serial.println(cmd);
   strncpy(lastCmd[ch], cmd, sizeof(lastCmd[ch]) - 1);
-  // EMS_UART.print(cmd); EMS_UART.print("\n");
-  // ... response read omitted in dry-run mode
+  EMS_UART.print(cmd);
+  EMS_UART.print("\n");
+  uint32_t t0 = millis();
+  while (millis() - t0 < SEND_INTERVAL_MS) {
+    if (EMS_UART.available()) Serial.write(EMS_UART.read());
+  }
 }
 
 void initAllChannels() {
