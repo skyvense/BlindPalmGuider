@@ -34,10 +34,13 @@ bool chEnabled[CHANNEL_COUNT] = {false};  // all off by default
 void selectChannel(uint8_t ch);
 void switchChannel(uint8_t ch);
 void sendEMSCmd(const char* cmd, uint8_t ch);
-float lastDist[CHANNEL_COUNT] = {9.9f};
-char  lastCmd[CHANNEL_COUNT][32] = {""};
-float lastGrid[3][3] = {{}};
-bool  cameraEnabled = true;
+float   lastDist[CHANNEL_COUNT] = {9.9f};
+char    lastCmd[CHANNEL_COUNT][32] = {""};
+float   lastGrid[3][3] = {{}};
+bool    cameraEnabled = true;
+uint8_t chMin[CHANNEL_COUNT];
+uint8_t chMax[CHANNEL_COUNT];
+float   distThreshold = 1.0f;  // max distance in meters (0.1–3.0)
 
 // 3x3 grid → channel (skip center [1][1])
 // ch: 0=TL 1=T 2=TR 3=L 4=R 5=BL 6=B 7=BR
@@ -49,7 +52,7 @@ static const uint8_t BLK_END[3]   = {8, 17, 25};
 
 // ── Web page ──────────────────────────────────────────────────────────────────
 
-static const char INDEX_HTML[] PROGMEM = R"=====(
+static const char INDEX_HTML[] PROGMEM = R"~HTML~(
 <!DOCTYPE html>
 <html>
 <head>
@@ -58,92 +61,176 @@ static const char INDEX_HTML[] PROGMEM = R"=====(
 <title>EMS Control</title>
 <style>
 *{box-sizing:border-box;margin:0;padding:0;font-family:sans-serif}
-body{background:#1a1a2e;color:#eee;padding:16px;max-width:480px;margin:0 auto}
-h2{font-size:13px;opacity:.5;text-transform:uppercase;letter-spacing:1px;margin-bottom:8px}
-.g3{display:grid;grid-template-columns:repeat(3,1fr);gap:6px;margin-bottom:20px}
-/* heatmap cells */
-.hcell{border-radius:8px;padding:12px 4px;text-align:center;transition:background .4s;min-height:72px;display:flex;flex-direction:column;justify-content:center}
-.hcell .hn{font-size:10px;opacity:.6;margin-bottom:2px}
-.hcell .hd{font-size:20px;font-weight:700}
-.hcell.hcenter{background:#232336!important}
-/* channel grid cells */
-.ccell{border-radius:8px;padding:8px 6px;background:#16213e;min-height:90px;display:flex;flex-direction:column;justify-content:space-between}
-.ccell.cdisabled{opacity:.45}
-.ccell.ccenter{background:#1a1a2e!important;border:1px dashed #333}
-.cn{font-size:11px;font-weight:700;margin-bottom:2px}
-.cs{font-size:9px;opacity:.6;margin-bottom:4px}
-.ccmd{font-size:8px;opacity:.7;word-break:break-all;min-height:20px;flex:1;margin-bottom:4px}
-/* toggle */
-.toggle{position:relative;width:44px;height:24px;flex-shrink:0;align-self:flex-end}
-.toggle input{opacity:0;width:0;height:0}
-.slider{position:absolute;cursor:pointer;inset:0;background:#444;border-radius:24px;transition:.3s}
-.slider:before{position:absolute;content:"";height:18px;width:18px;left:3px;bottom:3px;background:#fff;border-radius:50%;transition:.3s}
-input:checked+.slider{background:#43a047}
-input:checked+.slider:before{transform:translateX(20px)}
-/* bottom controls */
-.row{display:flex;justify-content:space-between;align-items:center;
-     padding:10px 14px;background:#16213e;border-radius:8px;margin-bottom:8px}
-.row b{font-size:14px}
-.row small{font-size:11px;opacity:.55;display:block;margin-top:2px}
-.btn{width:100%;padding:12px;border:none;color:#fff;border-radius:8px;
-     font-size:14px;cursor:pointer;margin-bottom:8px;transition:.3s}
+body{background:#1a1a2e;color:#eee;padding:14px;max-width:480px;margin:0 auto}
+.sec{font-size:11px;opacity:.4;text-transform:uppercase;letter-spacing:1px;margin:14px 0 6px}
+.g3{display:grid;grid-template-columns:repeat(3,1fr);gap:6px;margin-bottom:6px}
+.hcell{border-radius:8px;padding:10px 4px;text-align:center;transition:background .35s;min-height:66px;display:flex;flex-direction:column;justify-content:center}
+.hn{font-size:10px;opacity:.55;margin-bottom:2px}
+.hd{font-size:19px;font-weight:700}
+.hcenter{background:#222236!important}
+.ccell{border-radius:8px;padding:7px 6px;background:#16213e;min-height:86px;display:flex;flex-direction:column;justify-content:space-between}
+.ccell.off{opacity:.38}
+.ccenter2{background:#1a1a2e!important;border:1px dashed #2a2a4a}
+.cn{font-size:11px;font-weight:700}
+.cs{font-size:9px;opacity:.5;margin:2px 0 3px}
+.ccmd{font-size:8px;opacity:.65;word-break:break-all;flex:1;margin-bottom:4px;line-height:1.3}
+.tog{position:relative;width:40px;height:22px;flex-shrink:0;align-self:flex-end}
+.tog input{opacity:0;width:0;height:0}
+.sl{position:absolute;cursor:pointer;inset:0;background:#444;border-radius:22px;transition:.25s}
+.sl:before{position:absolute;content:"";height:16px;width:16px;left:3px;bottom:3px;background:#fff;border-radius:50%;transition:.25s}
+input:checked+.sl{background:#43a047}
+input:checked+.sl:before{transform:translateX(18px)}
+.rotbar{display:flex;align-items:center;gap:8px;margin-bottom:6px}
+.rotbar span{flex:1;font-size:12px;opacity:.65}
+.rbtn{background:#0f3460;border:none;color:#eee;border-radius:6px;padding:5px 14px;font-size:15px;cursor:pointer}
+/* dual range */
+.dr-row{background:#16213e;border-radius:8px;padding:8px 12px;margin-bottom:6px}
+.dr-lbl{font-size:12px;display:flex;justify-content:space-between;margin-bottom:8px}
+.dr-lbl span{opacity:.55;font-size:11px}
+.dr{position:relative;height:22px;display:flex;align-items:center}
+.dr-track{position:absolute;left:0;right:0;height:4px;background:#252538;border-radius:2px}
+.dr-fill{position:absolute;height:4px;background:#43a047;border-radius:2px;pointer-events:none}
+.dr input[type=range]{position:absolute;width:100%;pointer-events:none;-webkit-appearance:none;appearance:none;background:transparent;height:4px;margin:0}
+.dr input::-webkit-slider-thumb{pointer-events:all;width:16px;height:16px;border-radius:50%;background:#43a047;border:2px solid #fff;cursor:pointer;-webkit-appearance:none;box-shadow:0 1px 4px #0006}
+.dr input::-moz-range-thumb{pointer-events:all;width:14px;height:14px;border-radius:50%;background:#43a047;border:2px solid #fff;cursor:pointer;box-shadow:0 1px 4px #0006}
+/* threshold */
+.trow{background:#16213e;border-radius:8px;padding:9px 12px;margin-bottom:6px;display:flex;align-items:center;gap:8px}
+.trow input[type=range]{flex:1;accent-color:#e57c1e;height:4px}
+.tv{font-size:13px;width:46px;text-align:right;color:#e57c1e;font-weight:700;flex-shrink:0}
+/* controls */
+.crow{display:flex;justify-content:space-between;align-items:center;padding:10px 14px;background:#16213e;border-radius:8px;margin-bottom:8px}
+.crow b{font-size:14px}
+.crow small{font-size:11px;opacity:.5;display:block;margin-top:2px}
+.btn{width:100%;padding:12px;border:none;color:#fff;border-radius:8px;font-size:14px;cursor:pointer;margin-bottom:8px;transition:.25s}
 .bon{background:#0d47a1}.boff{background:#555}
 .master{border:1px solid #43a047}
 </style>
 </head>
 <body>
 
-<h2>Depth Heatmap</h2>
+<div class="sec">Depth Heatmap</div>
+<div class="rotbar">
+  <span id="rotLbl">Rotation: 0°</span>
+  <button class="rbtn" onclick="rotate(-1)">↺ 90°</button>
+  <button class="rbtn" onclick="rotate(1)">↻ 90°</button>
+</div>
 <div class="g3" id="hmap"></div>
 
-<h2>Channels</h2>
+<div class="sec">Channels</div>
 <div class="g3" id="cgrid"></div>
 
-<div class="row master">
+<div class="sec">Distance Threshold</div>
+<div class="trow">
+  <span style="font-size:11px;opacity:.5">0.1m</span>
+  <input type="range" id="thrSlider" min="10" max="300" step="5" value="100" oninput="onThr(this.value)">
+  <span style="font-size:11px;opacity:.5">3.0m</span>
+  <span class="tv" id="thrVal">1.00m</span>
+</div>
+
+<div class="sec">Intensity Range (1 – 30)</div>
+<div id="ranges"></div>
+
+<div class="crow master" style="margin-top:6px">
   <div><b>All Channels</b><small id="masterSub">all off</small></div>
-  <label class="toggle"><input type="checkbox" id="masterTog" onchange="toggleAll()"><span class="slider"></span></label>
+  <label class="tog"><input type="checkbox" id="masterTog" onchange="toggleAll()"><span class="sl"></span></label>
 </div>
 <button class="btn bon" id="camBtn" onclick="toggleCamera()">Camera: ON</button>
 
 <script>
 const CH_NAME=['TL','T','TR','L','R','BL','B','BR'];
 const CH_POS=[[0,0],[0,1],[0,2],[1,0],[1,2],[2,0],[2,1],[2,2]];
+let rotation=0,lastThr=1.0;
 
-function distColor(dist,enabled){
-  if(!enabled||dist>=1)return'#1a2a4a';
-  const t=1-dist;
-  return`rgb(${Math.round(t*230)},${Math.round((0.5-Math.abs(t-0.5))*200)},${Math.round((1-t)*160)})`;
+function vToSrc(r,c,rot){
+  switch(rot){case 1:return[2-c,r];case 2:return[2-r,2-c];case 3:return[c,2-r];}return[r,c];
+}
+function chAt(r,c){
+  if(r===1&&c===1)return -1;
+  const[sr,sc]=vToSrc(r,c,rotation);
+  if(sr===1&&sc===1)return -1;
+  return CH_POS.findIndex(([pr,pc])=>pr===sr&&pc===sc);
+}
+function distColor(dist,enabled,thr){
+  if(!enabled||dist>thr)return'#1a2a4a';
+  const t=1-dist/thr;
+  return`rgb(${Math.round(t*230)},${Math.round((0.5-Math.abs(t-.5))*200)},${Math.round((1-t)*160)})`;
 }
 
-// ── build heatmap (pure distance view) ──
+// ── heatmap & channel grids ──
 const hmap=document.getElementById('hmap');
-const hcells=[];
+const cgrid=document.getElementById('cgrid');
+const hcells=[],ccells=[],ctoggles=new Array(8);
 for(let r=0;r<3;r++)for(let c=0;c<3;c++){
-  const el=document.createElement('div');
   const center=r===1&&c===1;
-  el.className='hcell'+(center?' hcenter':'');
-  el.innerHTML=center
-    ?'<div class="hd" style="font-size:11px;opacity:.3">center</div>'
-    :'<div class="hn"></div><div class="hd">--</div>';
-  hmap.appendChild(el);hcells.push(el);
+  const h=document.createElement('div');
+  h.className='hcell'+(center?' hcenter':'');
+  h.innerHTML=center?'<div class="hd" style="font-size:10px;opacity:.2">·</div>'
+                    :'<div class="hn"></div><div class="hd">--</div>';
+  hmap.appendChild(h);hcells.push(h);
+  const cc=document.createElement('div');
+  cc.className=center?'ccell ccenter2':'ccell';
+  cc.innerHTML=center?'<div style="margin:auto;opacity:.12;font-size:10px">center</div>':'';
+  cgrid.appendChild(cc);ccells.push(cc);
 }
 
-// ── build channel grid (toggles + last cmd) ──
-const cgrid=document.getElementById('cgrid');
-const ctoggles=[];
-for(let r=0;r<3;r++)for(let c=0;c<3;c++){
-  const el=document.createElement('div');
-  const center=r===1&&c===1;
-  el.className='ccell'+(center?' ccenter':'');
-  if(center){el.innerHTML='<div style="text-align:center;opacity:.2;font-size:11px;margin:auto">center</div>';}
-  else{
-    // find channel index for this position
-    const i=CH_POS.findIndex(([pr,pc])=>pr===r&&pc===c);
-    el.innerHTML=`<div><div class="cn">ch${i} ${CH_NAME[i]}</div><div class="cs" id="cs${i}">disabled</div><div class="ccmd" id="ccmd${i}">--</div></div>
-      <label class="toggle"><input type="checkbox" id="ct${i}" onchange="toggleCh(${i})"><span class="slider"></span></label>`;
-    ctoggles[i]=el.querySelector('input');
+function rebuildCells(){
+  for(let r=0;r<3;r++)for(let c=0;c<3;c++){
+    if(r===1&&c===1)continue;
+    const i=chAt(r,c),cc=ccells[r*3+c];
+    cc.innerHTML=
+      `<div><div class="cn">ch${i} ${CH_NAME[i]}</div>`+
+      `<div class="cs" id="cs${i}">--</div>`+
+      `<div class="ccmd" id="ccmd${i}">--</div></div>`+
+      `<label class="tog"><input type="checkbox" id="ct${i}" onchange="toggleCh(${i})"><span class="sl"></span></label>`;
+    ctoggles[i]=cc.querySelector('input');
   }
-  cgrid.appendChild(el);
+}
+rebuildCells();
+
+function rotate(dir){
+  rotation=(rotation+dir+4)%4;
+  document.getElementById('rotLbl').textContent='Rotation: '+['0°','90°','180°','270°'][rotation];
+  rebuildCells();
+}
+
+// ── dual range sliders ──
+const rangesDiv=document.getElementById('ranges');
+for(let i=0;i<8;i++){
+  const d=document.createElement('div');d.className='dr-row';
+  d.innerHTML=
+    `<div class="dr-lbl"><b>ch${i} ${CH_NAME[i]}</b><span id="drv${i}">1 – 5</span></div>`+
+    `<div class="dr">`+
+      `<div class="dr-track"></div><div class="dr-fill" id="drf${i}"></div>`+
+      `<input type="range" id="drn${i}" min="1" max="30" value="1" oninput="drMove(${i})">`+
+      `<input type="range" id="drx${i}" min="1" max="30" value="5" oninput="drMove(${i})">`+
+    `</div>`;
+  rangesDiv.appendChild(d);drFill(i);
+}
+function drFill(i){
+  const mn=+document.getElementById('drn'+i).value;
+  const mx=+document.getElementById('drx'+i).value;
+  const p1=(mn-1)/29*100,p2=(mx-1)/29*100;
+  const f=document.getElementById('drf'+i);
+  f.style.left=p1+'%';f.style.width=(p2-p1)+'%';
+  document.getElementById('drv'+i).textContent=mn+' – '+mx;
+}
+const drT={};
+function drMove(i){
+  let mn=+document.getElementById('drn'+i).value;
+  let mx=+document.getElementById('drx'+i).value;
+  if(mn>mx){document.getElementById('drn'+i).value=mx;mn=mx;}
+  drFill(i);
+  clearTimeout(drT[i]);
+  drT[i]=setTimeout(()=>fetch(`/set/range/${i}?min=${mn}&max=${mx}`,{method:'POST'}),300);
+}
+
+// ── threshold ──
+let thrT;
+function onThr(v){
+  const m=v/100;
+  document.getElementById('thrVal').textContent=m.toFixed(2)+'m';
+  clearTimeout(thrT);
+  thrT=setTimeout(()=>fetch(`/set/threshold?v=${m}`,{method:'POST'}),300);
 }
 
 async function toggleCh(i){await fetch('/toggle/channel/'+i,{method:'POST'})}
@@ -153,31 +240,46 @@ async function toggleCamera(){await fetch('/toggle/camera',{method:'POST'})}
 async function update(){
   try{
     const d=await(await fetch('/data')).json();
-    // heatmap
-    for(let i=0;i<8;i++){
-      const[r,c]=CH_POS[i];
-      const el=hcells[r*3+c];
-      const ch=d.channels[i];
-      el.style.background=distColor(ch.dist,ch.enabled);
+    lastThr=d.threshold||1;
+    // heatmap (rotated)
+    for(let r=0;r<3;r++)for(let c=0;c<3;c++){
+      if(r===1&&c===1)continue;
+      const i=chAt(r,c);if(i<0)continue;
+      const ch=d.channels[i],el=hcells[r*3+c];
+      el.style.background=distColor(ch.dist,ch.enabled,lastThr);
       el.querySelector('.hn').textContent=`ch${i} ${CH_NAME[i]}`;
-      el.querySelector('.hd').textContent=!ch.enabled?'OFF':ch.dist>=1?'--':ch.dist.toFixed(2)+'m';
+      el.querySelector('.hd').textContent=!ch.enabled?'OFF':ch.dist>lastThr?'--':ch.dist.toFixed(2)+'m';
     }
-    // channel grid
+    // channel cells (rotated)
     for(let i=0;i<8;i++){
-      const ch=d.channels[i];
-      const [r,c]=CH_POS[i];
-      const cell=cgrid.children[r*3+c];
-      cell.className='ccell'+(ch.enabled?'':' cdisabled');
-      ctoggles[i].checked=ch.enabled;
-      document.getElementById('cs'+i).textContent=
-        ch.enabled?(ch.running?'● running':'○ stopped'):'disabled';
+      const ch=d.channels[i],el=document.getElementById('cs'+i);
+      if(!el)continue;
+      const[r,c]=CH_POS[i];
+      ccells[r*3+c].className='ccell'+(ch.enabled?'':' off');
+      if(ctoggles[i])ctoggles[i].checked=ch.enabled;
+      el.textContent=ch.enabled?(ch.running?'● running':'○ stopped'):'disabled';
       document.getElementById('ccmd'+i).textContent=ch.cmd||'--';
+    }
+    // range sliders
+    const act=document.activeElement?.id||'';
+    if(!act.match(/^dr[nx]/)){
+      for(let i=0;i<8;i++){
+        const ch=d.channels[i];
+        document.getElementById('drn'+i).value=ch.min;
+        document.getElementById('drx'+i).value=ch.max;
+        drFill(i);
+      }
+    }
+    // threshold
+    if(!act.match(/^thr/)){
+      document.getElementById('thrSlider').value=Math.round(lastThr*100);
+      document.getElementById('thrVal').textContent=lastThr.toFixed(2)+'m';
     }
     // master
     const anyOn=d.channels.some(c=>c.enabled);
-    const allOn=d.channels.every(c=>c.enabled);
     document.getElementById('masterTog').checked=anyOn;
-    document.getElementById('masterSub').textContent=allOn?'all on':anyOn?'partial':'all off';
+    document.getElementById('masterSub').textContent=
+      d.channels.every(c=>c.enabled)?'all on':anyOn?'partial':'all off';
     // camera
     const btn=document.getElementById('camBtn');
     btn.textContent='Camera: '+(d.camera?'ON':'OFF');
@@ -188,8 +290,7 @@ setInterval(update,300);update();
 </script>
 </body>
 </html>
-)=====";
-
+)~HTML~";
 // ── Web handlers ──────────────────────────────────────────────────────────────
 
 void handleRoot() {
@@ -212,10 +313,13 @@ void handleData() {
     j += "{\"enabled\":" + String(chEnabled[i] ? "true" : "false");
     j += ",\"running\":"  + String(chRunning[i] ? "true" : "false");
     j += ",\"dist\":"     + String(lastDist[i], 2);
-    j += ",\"cmd\":\""   + String(lastCmd[i]) + "\"}";
+    j += ",\"cmd\":\""   + String(lastCmd[i]) + "\"";
+    j += ",\"min\":"      + String(chMin[i]);
+    j += ",\"max\":"      + String(chMax[i]) + "}";
     if (i < CHANNEL_COUNT - 1) j += ",";
   }
-  j += "],\"camera\":" + String(cameraEnabled ? "true" : "false") + "}";
+  j += "],\"camera\":"    + String(cameraEnabled ? "true" : "false");
+  j += ",\"threshold\":" + String(distThreshold, 2) + "}";
   server.send(200, "application/json", j);
 }
 
@@ -251,6 +355,30 @@ void handleToggleAll() {
   for (uint8_t i = 0; i < CHANNEL_COUNT; i++) {
     if (anyOn) disableChannel(i); else enableChannel(i);
   }
+  server.send(200, "text/plain", "ok");
+}
+
+void handleSetThreshold() {
+  if (server.hasArg("v")) {
+    float v = server.arg("v").toFloat();
+    distThreshold = constrain(v, 0.1f, 3.0f);
+  }
+  server.send(200, "text/plain", "ok");
+}
+
+void handleSetRange() {
+  String uri = server.uri();  // /set/range/N
+  int ch = uri.substring(uri.lastIndexOf('/') + 1).toInt();
+  if (ch < 0 || ch >= CHANNEL_COUNT) { server.send(400); return; }
+  if (server.hasArg("min")) {
+    int v = server.arg("min").toInt();
+    chMin[ch] = constrain(v, 1, 30);
+  }
+  if (server.hasArg("max")) {
+    int v = server.arg("max").toInt();
+    chMax[ch] = constrain(v, 1, 30);
+  }
+  if (chMin[ch] > chMax[ch]) chMin[ch] = chMax[ch];
   server.send(200, "text/plain", "ok");
 }
 
@@ -303,11 +431,12 @@ void initAllChannels() {
   }
 }
 
-int distToVal(float dist_m) {
-  if (dist_m > 1.0f) return 0;
-  int v = (int)round(5.0f - dist_m * 4.0f);
-  if (v < 1) v = 1;
-  if (v > 5) v = 5;
+int distToVal(float dist_m, uint8_t ch) {
+  if (dist_m > distThreshold) return 0;
+  float t = 1.0f - dist_m / distThreshold;  // 0=far, 1=near
+  int v = (int)round(chMin[ch] + t * (chMax[ch] - chMin[ch]));
+  if (v < (int)chMin[ch]) v = chMin[ch];
+  if (v > (int)chMax[ch]) v = chMax[ch];
   return v;
 }
 
@@ -315,7 +444,7 @@ void updateEMSChannel(uint8_t ch, float dist_m) {
   if (!chEnabled[ch]) return;
   switchChannel(ch);
   lastDist[ch] = dist_m;
-  int val = distToVal(dist_m);
+  int val = distToVal(dist_m, ch);
 
   if (val == 0) {
     if (chRunning[ch]) {
@@ -484,8 +613,10 @@ void setup() {
   for (uint8_t i = 0; i < CHANNEL_COUNT; i++) {
     chEnabled[i] = false;
     chRunning[i] = false;
-    lastDist[i] = 9.9f;
+    lastDist[i]  = 9.9f;
     lastCmd[i][0] = '\0';
+    chMin[i] = 1;
+    chMax[i] = 5;
   }
 
   // WiFi AP
@@ -497,8 +628,11 @@ void setup() {
   server.on("/data", handleData);
   server.on("/toggle/camera", HTTP_POST, handleToggleCamera);
   server.on("/toggle/all",    HTTP_POST, handleToggleAll);
-  for (int i = 0; i < CHANNEL_COUNT; i++)
+  server.on("/set/threshold", HTTP_POST, handleSetThreshold);
+  for (int i = 0; i < CHANNEL_COUNT; i++) {
     server.on(("/toggle/channel/" + String(i)).c_str(), HTTP_POST, handleToggleChannel);
+    server.on(("/set/range/"      + String(i)).c_str(), HTTP_POST, handleSetRange);
+  }
   server.begin();
   Serial.println("web server started");
 
