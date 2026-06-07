@@ -1,13 +1,13 @@
-# EMS Multi-Channel Controller
+# BlindPalmGuider
 
-ESP32-S3 Super Mini firmware that reads depth from a MaixSense-A010 ToF camera, maps the scene into 8 directional zones, and drives 8 independent EMS (Electrical Muscle Stimulation) devices through a serial multiplexer. A built-in WiFi access point serves a real-time web dashboard for monitoring and control.
+ESP32-S3 Super Mini firmware for a palm-worn navigation aid for the visually impaired. Reads depth from a MaixSense-A010 ToF camera, maps the scene into 8 directional zones, and drives 8 independent EMS (Electrical Muscle Stimulation) devices through a serial multiplexer. Connects to WiFi and serves a real-time web dashboard for monitoring and control.
 
 ---
 
 ## How It Works
 
 ```
-[ToF Camera] ──SoftwareSerial──► [ESP32-S3] ──HardwareSerial──► [8-ch Mux] ──► [EMS ×8]
+[ToF Camera] ──HardwareSerial(1)──► [ESP32-S3] ──HardwareSerial──► [8-ch Mux] ──► [EMS ×8]
                                       │
                                    WiFi AP
                                       │
@@ -69,8 +69,8 @@ The center block is measured but not assigned to a channel. If the center distan
 |--------|---------|-------------|
 | `SWITCH_WAIT_MS` | `0` | Delay after mux switch before sending |
 | `SEND_INTERVAL_MS` | `10` | Time to wait for EMS response per command |
-| `AP_SSID` | `"EMS-Control"` | WiFi AP name |
-| `AP_PASS` | `"12345678"` | WiFi AP password |
+| `WIFI_SSID` | `"your-ssid"` | WiFi station SSID to connect to |
+| `WIFI_PASS` | `"your-pass"` | WiFi station password |
 
 ### EMS State Machine (per channel)
 
@@ -115,11 +115,11 @@ Pixel → distance: `dist_mm = (pixel / 5.1)²` (UNIT=0 default)
 
 ## Web Dashboard
 
-Connect to WiFi `EMS-Control` (password `12345678`) and open `http://192.168.4.1`.
+Connect the device to your WiFi (configure `WIFI_SSID` / `WIFI_PASS` in `src/main.cpp`) and open the device's IP in a browser.
 
 ### Sections
 
-**Depth Heatmap** — Live 3×3 color grid. Red = near, blue = far/off. Rotation buttons (↺ ↻) rotate the view in 90° steps without affecting channel assignment.
+**Depth Heatmap** — Live 3×3 color grid. Red = near, blue = far/off. Heatmap always reflects raw depth regardless of whether EMS channels are enabled. Rotation buttons (↺ ↻) are in progress.
 
 **Channels** — Same 3×3 layout with per-channel toggle switches, running/stopped status, and the last EMS command sent.
 
@@ -169,7 +169,6 @@ Target board: `dfrobot_firebeetle2_esp32s3` (pin-compatible with ESP32-S3 Super 
 | Library | Source |
 |---------|--------|
 | FastLED | `fastled/FastLED` |
-| EspSoftwareSerial | `plerup/EspSoftwareSerial` |
 | WiFi, WebServer | ESP32 Arduino core (built-in) |
 
 ---
