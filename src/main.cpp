@@ -149,8 +149,8 @@ function chAt(r,c){
   if(sr===1&&sc===1)return -1;
   return CH_POS.findIndex(([pr,pc])=>pr===sr&&pc===sc);
 }
-function distColor(dist,enabled,thr){
-  if(!enabled||dist>thr)return'#1a2a4a';
+function distColor(dist,thr){
+  if(dist>thr)return'#1a2a4a';
   const t=1-dist/thr;
   return`rgb(${Math.round(t*230)},${Math.round((0.5-Math.abs(t-.5))*200)},${Math.round((1-t)*160)})`;
 }
@@ -245,9 +245,9 @@ async function update(){
       if(r===1&&c===1)continue;
       const i=chAt(r,c);if(i<0)continue;
       const ch=d.channels[i],el=hcells[r*3+c];
-      el.style.background=distColor(ch.dist,ch.enabled,lastThr);
+      el.style.background=distColor(ch.dist,lastThr);
       el.querySelector('.hn').textContent=`ch${i} ${CH_NAME[i]}`;
-      el.querySelector('.hd').textContent=!ch.enabled?'OFF':ch.dist>lastThr?'--':ch.dist.toFixed(2)+'m';
+      el.querySelector('.hd').textContent=ch.dist>lastThr?'--':ch.dist.toFixed(2)+'m';
     }
     // channel cells (rotated)
     for(let i=0;i<8;i++){
@@ -441,9 +441,9 @@ int distToVal(float dist_m, uint8_t ch) {
 }
 
 void updateEMSChannel(uint8_t ch, float dist_m) {
+  lastDist[ch] = dist_m;
   if (!chEnabled[ch]) return;
   switchChannel(ch);
-  lastDist[ch] = dist_m;
   int val = distToVal(dist_m, ch);
 
   if (val == 0) {
