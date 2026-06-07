@@ -40,11 +40,22 @@ bool    cameraEnabled = true;
 uint8_t chMin[CHANNEL_COUNT];
 uint8_t chMax[CHANNEL_COUNT];
 float   distThreshold = 1.0f;  // max distance in meters (0.1–3.0)
+uint8_t viewRotation  = 0;     // 0=0° 1=90°CW 2=180° 3=270°CW
 
 // 3x3 grid → channel (skip center [1][1])
 // ch: 0=TL 1=T 2=TR 3=L 4=R 5=BL 6=B 7=BR
 static const uint8_t CH_ROW[CHANNEL_COUNT] = {0, 0, 0, 1, 1, 2, 2, 2};
 static const uint8_t CH_COL[CHANNEL_COUNT] = {0, 1, 2, 0, 2, 0, 1, 2};
+
+// Map visual (r,c) → source camera (r,c) given rotation
+static void vToSrc(uint8_t r, uint8_t c, uint8_t rot, uint8_t &sr, uint8_t &sc) {
+  switch (rot) {
+    case 1: sr = 2 - c; sc = r;     return;
+    case 2: sr = 2 - r; sc = 2 - c; return;
+    case 3: sr = c;     sc = 2 - r; return;
+    default: sr = r;    sc = c;
+  }
+}
 
 static const uint8_t BLK_START[3] = {0,  8, 17};
 static const uint8_t BLK_END[3]   = {8, 17, 25};
@@ -190,6 +201,7 @@ function rotate(dir){
   rotation=(rotation+dir+4)%4;
   document.getElementById('rotLbl').textContent='Rotation: '+['0°','90°','180°','270°'][rotation];
   rebuildCells();
+  fetch(`/set/rotation?v=${rotation}`,{method:'POST'});
 }
 
 // ── dual range sliders ──
@@ -317,8 +329,9 @@ void handleData() {
     j += ",\"max\":"      + String(chMax[i]) + "}";
     if (i < CHANNEL_COUNT - 1) j += ",";
   }
-  j += "],\"camera\":"    + String(cameraEnabled ? "true" : "false");
-  j += ",\"threshold\":" + String(distThreshold, 2) + "}";
+  j += "],\"camera\":"     + String(cameraEnabled ? "true" : "false");
+  j += ",\"threshold\":"  + String(distThreshold, 2);
+  j += ",\"rotation\":"   + String(viewRotation) + "}";
   server.send(200, "application/json", j);
 }
 
@@ -353,6 +366,14 @@ void handleToggleAll() {
   for (uint8_t i = 0; i < CHANNEL_COUNT; i++) if (chEnabled[i]) { anyOn = true; break; }
   for (uint8_t i = 0; i < CHANNEL_COUNT; i++) {
     if (anyOn) disableChannel(i); else enableChannel(i);
+  }
+  server.send(200, "text/plain", "ok");
+}
+
+void handleSetRotation() {
+  if (server.hasArg("v")) {
+    int v = server.arg("v").toInt();
+    viewRotation = (uint8_t)constrain(v, 0, 3);
   }
   server.send(200, "text/plain", "ok");
 }
@@ -639,6 +660,7 @@ void setup() {
   server.on("/toggle/camera", HTTP_POST, handleToggleCamera);
   server.on("/toggle/all",    HTTP_POST, handleToggleAll);
   server.on("/set/threshold", HTTP_POST, handleSetThreshold);
+  server.on("/set/rotation",  HTTP_POST, handleSetRotation);
   for (int i = 0; i < CHANNEL_COUNT; i++) {
     server.on(("/toggle/channel/" + String(i)).c_str(), HTTP_POST, handleToggleChannel);
     server.on(("/set/range/"      + String(i)).c_str(), HTTP_POST, handleSetRange);
@@ -694,16 +716,20 @@ void loop() {
   computeGrid(frameBuf, grid);
   memcpy(lastGrid, grid, sizeof(grid));
 
-  // apply center override: if center is closer, propagate to surrounding cells
+  // apply center override using rotated source coordinates
   float centerDist = pixelToMeters((uint8_t)grid[1][1]);
   for (uint8_t ch = 0; ch < CHANNEL_COUNT; ch++) {
-    float d = pixelToMeters((uint8_t)grid[CH_ROW[ch]][CH_COL[ch]]);
-    if (centerDist < d) grid[CH_ROW[ch]][CH_COL[ch]] = grid[1][1];
+    uint8_t sr, sc;
+    vToSrc(CH_ROW[ch], CH_COL[ch], viewRotation, sr, sc);
+    float d = pixelToMeters((uint8_t)grid[sr][sc]);
+    if (centerDist < d) grid[sr][sc] = grid[1][1];
   }
 
-  // update all 8 EMS channels
+  // update all 8 EMS channels using rotated source coordinates
   for (uint8_t ch = 0; ch < CHANNEL_COUNT; ch++) {
-    float dist_m = pixelToMeters((uint8_t)grid[CH_ROW[ch]][CH_COL[ch]]);
+    uint8_t sr, sc;
+    vToSrc(CH_ROW[ch], CH_COL[ch], viewRotation, sr, sc);
+    float dist_m = pixelToMeters((uint8_t)grid[sr][sc]);
     updateEMSChannel(ch, dist_m);
   }
 
