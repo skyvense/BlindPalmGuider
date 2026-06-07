@@ -1,6 +1,5 @@
 #include <HardwareSerial.h>
 #include <FastLED.h>
-#include <SoftwareSerial.h>
 #include <WiFi.h>
 #include <WebServer.h>
 
@@ -15,12 +14,12 @@
 #define SWITCH_WAIT_MS   0
 #define SEND_INTERVAL_MS 10
 
-#define AP_SSID "EMS-Control"
-#define AP_PASS "12345678"
+#define WIFI_SSID "S1"
+#define WIFI_PASS "checkin888"
 
 CRGB leds[NUM_LEDS];
 HardwareSerial EMS_UART(2);
-SoftwareSerial Camera_UART(8, 9);
+HardwareSerial Camera_UART(1);
 WebServer server(80);
 
 char serialLineBuffer[32] = {0};
@@ -417,6 +416,7 @@ void sendEMSCmd(const char* cmd, uint8_t ch) {
   uint32_t t0 = millis();
   while (millis() - t0 < SEND_INTERVAL_MS) {
     if (EMS_UART.available()) Serial.write(EMS_UART.read());
+    else yield();
   }
 }
 
@@ -499,7 +499,7 @@ bool readCameraFrame(uint8_t* buf) {
   uint8_t prev = 0xFF;
   bool synced = false;
   while (millis() < deadline) {
-    if (!Camera_UART.available()) continue;
+    if (!Camera_UART.available()) { yield(); continue; }
     uint8_t b = Camera_UART.read();
     if (prev == 0x00 && b == 0xFF) { synced = true; break; }
     prev = b;
@@ -508,14 +508,17 @@ bool readCameraFrame(uint8_t* buf) {
   for (uint8_t i = 0; i < 18; ) {
     if (millis() >= deadline) return false;
     if (Camera_UART.available()) { Camera_UART.read(); i++; }
+    else yield();
   }
   for (uint16_t i = 0; i < 625; ) {
     if (millis() >= deadline) return false;
     if (Camera_UART.available()) { buf[i++] = Camera_UART.read(); }
+    else yield();
   }
   for (uint8_t i = 0; i < 2; ) {
     if (millis() >= deadline) return false;
     if (Camera_UART.available()) { Camera_UART.read(); i++; }
+    else yield();
   }
   return true;
 }
@@ -531,7 +534,7 @@ void pollEMS() {
       if (EMS_UART.available()) {
         if (!printed) { Serial.print("["); Serial.print(i+1); Serial.print("] "); printed = true; }
         Serial.write(EMS_UART.read());
-      }
+      } else yield();
     }
   }
 }
@@ -553,7 +556,7 @@ void runAutoTest(uint32_t switchWait, uint32_t sendInterval) {
           if (!pr) { Serial.print("["); Serial.print(i+1); Serial.print("] +");
                      Serial.print(millis()-s); Serial.print("ms: "); pr=true; got=true; }
           Serial.write(EMS_UART.read());
-        }
+        } else yield();
       }
       Serial.print("  interval: "); Serial.print(millis()-s); Serial.println("ms");
       if (!got) { Serial.print("["); Serial.print(i+1); Serial.println("] no response -> stop"); return; }
@@ -599,7 +602,7 @@ void flushBufferedSerialToEMS() {
 void setup() {
   Serial.begin(115200);
   EMS_UART.begin(115200, SERIAL_8N1, 17, 18);
-  Camera_UART.begin(115200);
+  Camera_UART.begin(115200, SERIAL_8N1, 8, 9);
 
   FastLED.addLeds<SK6812, LED_PIN>(leds, NUM_LEDS);
   leds[0] = CRGB::Blue; FastLED.show();
@@ -618,10 +621,17 @@ void setup() {
     chMin[i] = 1;
     chMax[i] = 5;
   }
-
-  // WiFi AP
-  WiFi.softAP(AP_SSID, AP_PASS);
-  Serial.print("AP IP: "); Serial.println(WiFi.softAPIP());
+  delay(5000);
+  // WiFi STA
+  WiFi.mode(WIFI_STA);
+  WiFi.begin(WIFI_SSID, WIFI_PASS);
+  Serial.print("Connecting to WiFi");
+  while (WiFi.status() != WL_CONNECTED) {
+    delay(500);
+    Serial.print(".");
+  }
+  Serial.println();
+  Serial.print("IP: "); Serial.println(WiFi.localIP());
 
   // web routes
   server.on("/", handleRoot);
@@ -689,17 +699,6 @@ void loop() {
   for (uint8_t ch = 0; ch < CHANNEL_COUNT; ch++) {
     float d = pixelToMeters((uint8_t)grid[CH_ROW[ch]][CH_COL[ch]]);
     if (centerDist < d) grid[CH_ROW[ch]][CH_COL[ch]] = grid[1][1];
-  }
-
-  // print 3x3
-  Serial.println("grid (m):");
-  for (uint8_t r = 0; r < 3; r++) {
-    for (uint8_t c = 0; c < 3; c++) {
-      if (r == 1 && c == 1) { Serial.print("  --  "); continue; }
-      char tmp[8]; dtostrf(pixelToMeters((uint8_t)grid[r][c]), 4, 2, tmp);
-      Serial.print(tmp); Serial.print(" ");
-    }
-    Serial.println();
   }
 
   // update all 8 EMS channels
